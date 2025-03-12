@@ -1,6 +1,7 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useState, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import useGameStore from '../store/gameStore';
 
 interface AsteroidFieldProps {
   count?: number;
@@ -14,52 +15,77 @@ const AsteroidField = ({
   size = [0.3, 1.5],
 }: AsteroidFieldProps) => {
   const instancedMeshRef = useRef<THREE.InstancedMesh>(null);
+  const [asteroids, setAsteroids] = useState<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: number;
+    alive: boolean;
+  }[]>([]);
   
-  // Create asteroid geometry with some randomness
+  // Get laser shots from the game store
+  const { laserShots, removeLaserShot, incrementScore } = useGameStore();
+  
+  // Create asteroid geometry with more realistic shape
   const asteroidGeometry = useMemo(() => {
-    const geometry = new THREE.IcosahedronGeometry(1, 0);
-    // Add some noise to the vertices to make them look more like asteroids
+    // Start with a higher detail icosahedron for better asteroid shape
+    const geometry = new THREE.IcosahedronGeometry(1, 1);
+    
+    // Add noise to the vertices to make them look more like asteroids
     const positions = geometry.attributes.position;
     const vertices = [];
+    
+    // Use perlin-like noise for more natural looking deformations
     for (let i = 0; i < positions.count; i++) {
       const x = positions.getX(i);
       const y = positions.getY(i);
       const z = positions.getZ(i);
       
-      // Add random displacement to each vertex
-      const noise = 0.2;
+      // Calculate distance from center for variable noise
+      const distance = Math.sqrt(x * x + y * y + z * z);
+      
+      // Add random displacement to each vertex with more variation
+      // Use different noise values for different axes for more irregular shapes
+      const noiseX = 0.3 * Math.sin(x * 5 + y * 3) * Math.cos(z * 2);
+      const noiseY = 0.3 * Math.sin(y * 4 + z * 2) * Math.cos(x * 3);
+      const noiseZ = 0.3 * Math.sin(z * 3 + x * 4) * Math.cos(y * 5);
+      
       vertices.push(
-        x + (Math.random() - 0.5) * noise,
-        y + (Math.random() - 0.5) * noise,
-        z + (Math.random() - 0.5) * noise
+        x + noiseX,
+        y + noiseY,
+        z + noiseZ
       );
     }
     
-    // Update the geometry with the new vertices
-    const newGeometry = new THREE.IcosahedronGeometry(1, 1);
+    // Create a new geometry with the modified vertices
+    const newGeometry = new THREE.BufferGeometry();
     newGeometry.setAttribute(
       'position',
       new THREE.Float32BufferAttribute(vertices, 3)
     );
+    
+    // Compute normals for proper lighting
     newGeometry.computeVertexNormals();
     
     return newGeometry;
   }, []);
   
-  // Create asteroid material
+  // Create asteroid material with more realistic texture
   const asteroidMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: '#888888',
+      color: '#8B8B8B',
       roughness: 0.9,
       metalness: 0.1,
       flatShading: true,
+      // Add some variation in color
+      vertexColors: false,
+      // Add some bumpiness
+      bumpScale: 0.05,
     });
   }, []);
   
-  // Create matrices for each asteroid instance
-  const matrices = useMemo(() => {
-    const matrices = [];
-    const matrix = new THREE.Matrix4();
+  // Initialize asteroids
+  useEffect(() => {
+    const newAsteroids = [];
     
     for (let i = 0; i < count; i++) {
       // Random position within a sphere
@@ -72,79 +98,97 @@ const AsteroidField = ({
       const z = r * Math.cos(phi);
       
       // Random rotation
-      const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(
-        new THREE.Euler(
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
-          Math.random() * Math.PI
-        )
-      );
+      const rotX = Math.random() * Math.PI;
+      const rotY = Math.random() * Math.PI;
+      const rotZ = Math.random() * Math.PI;
       
       // Random scale between min and max size
       const scale = size[0] + Math.random() * (size[1] - size[0]);
-      const scaleMatrix = new THREE.Matrix4().makeScale(scale, scale, scale);
       
-      // Combine transformations
-      matrix
-        .makeTranslation(x, y, z)
-        .multiply(rotationMatrix)
-        .multiply(scaleMatrix);
-      
-      matrices.push(matrix.clone());
+      newAsteroids.push({
+        position: new THREE.Vector3(x, y, z),
+        rotation: new THREE.Euler(rotX, rotY, rotZ),
+        scale,
+        alive: true
+      });
     }
     
-    return matrices;
+    setAsteroids(newAsteroids);
   }, [count, radius, size]);
   
-  // Set initial matrices
-  useMemo(() => {
-    if (instancedMeshRef.current) {
-      matrices.forEach((matrix, i) => {
-        instancedMeshRef.current?.setMatrixAt(i, matrix);
+  // Update asteroid matrices and check for collisions
+  useFrame((state, deltaTime) => {
+    if (!instancedMeshRef.current || asteroids.length === 0) return;
+    
+    const time = state.clock.getElapsedTime();
+    let asteroidsUpdated = false;
+    
+    // Check for collisions with laser shots
+    const updatedAsteroids = [...asteroids];
+    const laserShotsToRemove = new Set<number>();
+    
+    // Process each asteroid
+    updatedAsteroids.forEach((asteroid, asteroidIndex) => {
+      if (!asteroid.alive) return;
+      
+      // Rotate the asteroid
+      asteroid.rotation.x += deltaTime * 0.2 * (Math.sin(asteroidIndex) * 0.5 + 0.5);
+      asteroid.rotation.y += deltaTime * 0.3 * (Math.cos(asteroidIndex) * 0.5 + 0.5);
+      asteroid.rotation.z += deltaTime * 0.1 * (Math.sin(asteroidIndex + 2) * 0.5 + 0.5);
+      
+      // Check for collisions with laser shots
+      laserShots.forEach(shot => {
+        if (laserShotsToRemove.has(shot.id)) return;
+        
+        // Simple distance-based collision detection
+        const distance = shot.position.distanceTo(asteroid.position);
+        const collisionThreshold = asteroid.scale * 0.9; // Adjust based on asteroid size
+        
+        if (distance < collisionThreshold) {
+          // Mark the asteroid as destroyed
+          asteroid.alive = false;
+          
+          // Mark the laser shot for removal
+          laserShotsToRemove.add(shot.id);
+          
+          // Increment the score
+          incrementScore(100);
+          
+          asteroidsUpdated = true;
+        }
       });
+      
+      // Update the matrix for this asteroid
+      const matrix = new THREE.Matrix4();
+      matrix.compose(
+        asteroid.position,
+        new THREE.Quaternion().setFromEuler(asteroid.rotation),
+        new THREE.Vector3(asteroid.scale, asteroid.scale, asteroid.scale)
+      );
+      
+      // Only render if the asteroid is alive
+      if (asteroid.alive && instancedMeshRef.current) {
+        instancedMeshRef.current.setMatrixAt(asteroidIndex, matrix);
+      } else if (instancedMeshRef.current) {
+        // For destroyed asteroids, move them far away (or you could create explosion effects here)
+        const hiddenMatrix = new THREE.Matrix4().makeTranslation(1000, 1000, 1000);
+        instancedMeshRef.current.setMatrixAt(asteroidIndex, hiddenMatrix);
+      }
+    });
+    
+    // Remove laser shots that hit asteroids
+    laserShotsToRemove.forEach(id => {
+      removeLaserShot(id);
+    });
+    
+    // Update the instance matrix if any changes were made
+    if (instancedMeshRef.current && (asteroidsUpdated || time < 1)) {
       instancedMeshRef.current.instanceMatrix.needsUpdate = true;
     }
-  }, [matrices]);
-  
-  // Animate the asteroids
-  useFrame((state) => {
+    
+    // Slowly rotate the entire asteroid field
     if (instancedMeshRef.current) {
-      const time = state.clock.getElapsedTime();
-      
-      // Rotate the entire asteroid field slowly
       instancedMeshRef.current.rotation.y = time * 0.02;
-      
-      // Update individual asteroid rotations
-      for (let i = 0; i < count; i++) {
-        const matrix = new THREE.Matrix4();
-        instancedMeshRef.current.getMatrixAt(i, matrix);
-        
-        // Extract position and scale
-        const position = new THREE.Vector3();
-        const rotation = new THREE.Quaternion();
-        const scale = new THREE.Vector3();
-        matrix.decompose(position, rotation, scale);
-        
-        // Apply a slow rotation based on the asteroid's position
-        const rotationSpeed = 0.1 + Math.sin(position.x * 0.5) * 0.05;
-        const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(
-          new THREE.Euler(
-            time * rotationSpeed * 0.1,
-            time * rotationSpeed * 0.15,
-            time * rotationSpeed * 0.05
-          )
-        );
-        
-        // Reconstruct the matrix
-        const newMatrix = new THREE.Matrix4()
-          .makeTranslation(position.x, position.y, position.z)
-          .multiply(rotationMatrix)
-          .scale(scale);
-        
-        instancedMeshRef.current.setMatrixAt(i, newMatrix);
-      }
-      
-      instancedMeshRef.current.instanceMatrix.needsUpdate = true;
     }
   });
   

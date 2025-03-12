@@ -1,12 +1,14 @@
 import { Physics } from '@react-three/rapier';
-import { Stats, useGLTF, OrbitControls } from '@react-three/drei';
+import { Stats, useGLTF } from '@react-three/drei';
 import SpaceFighter from './components/SpaceFighter';
 import SpaceEnvironment from './components/SpaceEnvironment';
 import SpaceLighting from './components/SpaceLighting';
 import AsteroidField from './components/AsteroidField';
+import LaserField from './components/LaserField';
 import { useControls } from 'leva';
 import { Canvas } from '@react-three/fiber';
-import { Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
+import useGameStore from './store/gameStore';
 
 useGLTF.preload('/models/ship.gltf');
 
@@ -42,50 +44,57 @@ const GameScene = () => {
     asteroidSizeMin: { value: 0.3, min: 0.1, max: 1, step: 0.1 },
     asteroidSizeMax: { value: 1.5, min: 0.5, max: 3, step: 0.1 },
   });
+  
+  // Get the score from the game store
+  const { score } = useGameStore();
 
   return (
     <>
-     <Canvas
-      gl={{
-        antialias: false
-      }}
-      camera={{ position: [0, 5, 15], fov: 60 }}
-      shadows
-    >
-      <SpaceLighting 
-        mainLightIntensity={intensity} 
-        ambientLightIntensity={0.2}
-      />
+      {/* Game UI */}
+      <div className="absolute top-0 left-0 p-4 text-white z-10">
+        <div className="text-2xl font-bold">Score: {score}</div>
+        <div className="mt-2 text-sm">
+          <p>Controls:</p>
+          <p>Arrow keys - Move spaceship</p>
+          <p>F key - Shoot lasers</p>
+        </div>
+      </div>
       
-      <SpaceEnvironment 
-        starsCount={starsCount}
-        starsRadius={starsRadius}
-        starsDepth={starsDepth}
-      />
-      
-      <AsteroidField 
-        count={asteroidCount}
-        radius={asteroidRadius}
-        size={[asteroidSizeMin, asteroidSizeMax]}
-      />
-      
-      <Physics debug timeStep="vary" gravity={[0, 0, 0]}>
-        <Suspense fallback={null}>
-          <SpaceFighter 
-            rotation={[rotationX, rotationY, rotationZ]} 
-            speed={shipSpeed}
-          />
-        </Suspense>
-      </Physics>
-      
-      <OrbitControls
-        enablePan={true}
-        enableZoom={true}
-        enableRotate={true}
-        makeDefault
-      />
-      
-      <Stats />
+      <Canvas
+        gl={{
+          antialias: false
+        }}
+        camera={{ position: [0, 5, 15], fov: 60 }}
+        shadows
+      >
+        <SpaceLighting 
+          mainLightIntensity={intensity} 
+          ambientLightIntensity={0.2}
+        />
+        
+        <SpaceEnvironment 
+          starsCount={starsCount}
+          starsRadius={starsRadius}
+          starsDepth={starsDepth}
+        />
+        
+        <AsteroidField 
+          count={asteroidCount}
+          radius={asteroidRadius}
+          size={[asteroidSizeMin, asteroidSizeMax]}
+        />
+        
+        <Physics debug={false} timeStep="vary" gravity={[0, 0, 0]}>
+          <Suspense fallback={null}>
+            <SpaceFighter 
+              rotation={[rotationX, rotationY, rotationZ]} 
+              speed={shipSpeed}
+            />
+            <LaserField />
+          </Suspense>
+        </Physics>
+        
+        <Stats />
       </Canvas>
     </>
   );
